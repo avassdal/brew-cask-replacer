@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 # App matcher for Brew Cask Replacer
 
+require 'shellwords'
+
 class AppMatcher
   # Common name variations and mappings
   NAME_MAPPINGS = {
