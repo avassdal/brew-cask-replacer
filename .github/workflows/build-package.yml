@@ -16,7 +16,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
@@ -127,14 +127,14 @@ jobs:
           || echo "DMG creation failed, continuing anyway"
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: brew-cask-replacer-${{ env.VERSION }}.pkg
           path: brew-cask-replacer-${{ env.VERSION }}.pkg
           if-no-files-found: error
 
       - name: Upload DMG artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: brew-cask-replacer-${{ env.VERSION }}.dmg
           path: brew-cask-replacer-${{ env.VERSION }}.dmg
