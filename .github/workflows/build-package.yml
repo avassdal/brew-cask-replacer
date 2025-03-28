@@ -1,0 +1,157 @@
+name: Build macOS Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (without v prefix)'
+        required: true
+        default: '1.1.0'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+
+      - name: Set version from tag or input
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Install packaging dependencies
+        run: |
+          brew install create-dmg
+          gem install fpm
+
+      - name: Prepare package structure
+        run: |
+          mkdir -p pkg/brew-cask-replacer/usr/local/bin
+          mkdir -p pkg/brew-cask-replacer/usr/local/lib/brew-cask-replacer
+          mkdir -p pkg/brew-cask-replacer/usr/local/etc/brew-cask-replacer
+          
+          # Copy files
+          cp bin/brew-cask-replacer pkg/brew-cask-replacer/usr/local/bin/
+          cp -r lib/* pkg/brew-cask-replacer/usr/local/lib/brew-cask-replacer/
+          cp -r config/* pkg/brew-cask-replacer/usr/local/etc/brew-cask-replacer/
+          
+          # Update path references in main script
+          sed -i '' 's|require_relative '\''\.\.\/lib\/|require '\''\/usr\/local\/lib\/brew-cask-replacer\/|g' pkg/brew-cask-replacer/usr/local/bin/brew-cask-replacer
+          
+          # Make executable
+          chmod +x pkg/brew-cask-replacer/usr/local/bin/brew-cask-replacer
+
+      - name: Create installer package
+        run: |
+          # Build package
+          fpm -s dir -t osxpkg \
+            --name brew-cask-replacer \
+            --version ${{ env.VERSION }} \
+            --vendor "Aleksander Vassdal" \
+            --maintainer "Aleksander Vassdal" \
+            --description "A tool to replace manually installed applications with Homebrew Cask versions" \
+            --url "https://github.com/avassdal/brew-cask-replacer" \
+            --osxpkg-identifier-prefix com.avassdal \
+            --after-install scripts/postinstall.sh \
+            -C pkg/brew-cask-replacer \
+            usr
+
+      - name: Create scripts directory and postinstall script
+        run: |
+          mkdir -p scripts
+          cat > scripts/postinstall.sh << 'EOF'
+          #!/bin/bash
+          # Create default directories
+          mkdir -p ~/.brew-cask-replacer/backups
+          mkdir -p ~/.brew-cask-replacer/logs
+          
+          # Set permissions
+          chmod -R 755 /usr/local/bin/brew-cask-replacer
+          chmod -R 755 /usr/local/lib/brew-cask-replacer
+          chmod -R 644 /usr/local/etc/brew-cask-replacer
+          
+          echo "Brew Cask Replacer has been installed successfully!"
+          exit 0
+          EOF
+          
+          chmod +x scripts/postinstall.sh
+
+      - name: Build pkg installer
+        run: |
+          fpm -s dir -t osxpkg \
+            --name brew-cask-replacer \
+            --version ${{ env.VERSION }} \
+            --vendor "Aleksander Vassdal" \
+            --maintainer "Aleksander Vassdal" \
+            --description "A tool to replace manually installed applications with Homebrew Cask versions" \
+            --url "https://github.com/avassdal/brew-cask-replacer" \
+            --osxpkg-identifier-prefix com.avassdal \
+            --after-install scripts/postinstall.sh \
+            -C pkg/brew-cask-replacer \
+            usr
+
+      - name: Create DMG
+        run: |
+          mkdir -p dmg-contents
+          cp *.pkg dmg-contents/
+          cp README.md dmg-contents/
+          cp CHANGELOG.md dmg-contents/
+          
+          create-dmg \
+            --volname "Brew Cask Replacer ${{ env.VERSION }}" \
+            --volicon "icon.icns" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "Brew Cask Replacer.pkg" 200 190 \
+            --hide-extension "Brew Cask Replacer.pkg" \
+            --app-drop-link 600 185 \
+            "brew-cask-replacer-${{ env.VERSION }}.dmg" \
+            "dmg-contents/" \
+          || echo "DMG creation failed, continuing anyway"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: brew-cask-replacer-${{ env.VERSION }}.pkg
+          path: brew-cask-replacer-${{ env.VERSION }}.pkg
+          if-no-files-found: error
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: brew-cask-replacer-${{ env.VERSION }}.dmg
+          path: brew-cask-replacer-${{ env.VERSION }}.dmg
+          if-no-files-found: warn
+
+      - name: Create Release
+        if: github.event_name == 'push'
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Brew Cask Replacer ${{ env.VERSION }}
+          draft: false
+          prerelease: false
+          files: |
+            brew-cask-replacer-${{ env.VERSION }}.pkg
+            brew-cask-replacer-${{ env.VERSION }}.dmg
+          body: |
+            Brew Cask Replacer ${{ env.VERSION }}
+            
+            See CHANGELOG.md for details.

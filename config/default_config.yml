@@ -1,0 +1,16 @@
+# Default configuration for Brew Cask Replacer
+
+# Applications to exclude from replacement
+# Example: ['firefox', 'chrome', '/^microsoft.*/']
+exclude: []
+
+# Backup directory where app backups will be stored
+backup_dir: ~/.brew-cask-replacer/backups
+
+# Log file path
+log_file: ~/.brew-cask-replacer/logs/brew-cask-replacer.log
+
+# Default behavior
+interactive: false
+dry_run: false
+verbose: false

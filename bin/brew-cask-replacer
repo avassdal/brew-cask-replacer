@@ -1,0 +1,160 @@
+#!/usr/bin/env ruby
+# Brew Cask Replacer - Modern Version
+# A tool to replace manually installed applications with Homebrew Cask versions
+
+require 'optparse'
+require 'yaml'
+require 'fileutils'
+require_relative '../lib/error_handler'
+require_relative '../lib/backup_manager'
+require_relative '../lib/app_matcher'
+require_relative '../lib/homebrew_interface'
+require_relative '../lib/progress_tracker'
+
+# Default configurations
+DEFAULT_CONFIG = {
+  'exclude' => [],
+  'backup_dir' => File.expand_path('~/.brew-cask-replacer/backups'),
+  'log_file' => File.expand_path('~/.brew-cask-replacer/logs/brew-cask-replacer.log'),
+  'interactive' => false,
+  'dry_run' => false,
+  'verbose' => false
+}
+
+# Parse command line options
+options = DEFAULT_CONFIG.dup
+OptionParser.new do |opts|
+  opts.banner = "Usage: brew-cask-replacer [options]"
+  
+  opts.on("-d", "--dry-run", "Show what would happen without making changes") do
+    options['dry_run'] = true
+  end
+  
+  opts.on("-i", "--interactive", "Confirm each replacement") do
+    options['interactive'] = true
+  end
+  
+  opts.on("-b", "--backup-only", "Create backups without replacement") do
+    options['backup_only'] = true
+  end
+  
+  opts.on("-r APP", "--revert APP", "Restore a specific app from backup") do |app|
+    options['revert'] = app
+  end
+  
+  opts.on("--revert-all", "Restore all backed-up apps") do
+    options['revert_all'] = true
+  end
+  
+  opts.on("--list-backups", "Show all available backups") do
+    options['list_backups'] = true
+  end
+  
+  opts.on("-e FILE", "--exclude-file FILE", "Specify a file containing apps to exclude") do |file|
+    if File.exist?(file)
+      exclude_list = YAML.load_file(file) rescue []
+      options['exclude'].concat(exclude_list) if exclude_list.is_a?(Array)
+    end
+  end
+  
+  opts.on("-v", "--verbose", "Enable verbose output") do
+    options['verbose'] = true
+  end
+  
+  opts.on("-h", "--help", "Show this help message") do
+    puts opts
+    exit
+  end
+end.parse!
+
+# Initialize components
+FileUtils.mkdir_p(File.dirname(options['log_file']))
+FileUtils.mkdir_p(options['backup_dir'])
+
+error_handler = ErrorHandler.new(options['log_file'], options['verbose'])
+backup_manager = BackupManager.new(options['backup_dir'], error_handler)
+homebrew = HomebrewInterface.new(error_handler)
+app_matcher = AppMatcher.new(options['exclude'], error_handler)
+progress = ProgressTracker.new
+
+# Check if Homebrew is installed
+unless homebrew.installed?
+  error_handler.exit_with_error("Homebrew is not installed. Please install it first.")
+end
+
+# Handle special operations
+if options['list_backups']
+  backup_manager.list_backups
+  exit
+end
+
+if options['revert']
+  backup_manager.revert_app(options['revert'])
+  exit
+end
+
+if options['revert_all']
+  backup_manager.revert_all
+  exit
+end
+
+# Main application logic
+apps = Dir.glob('/Applications/*.app')
+progress.total = apps.size
+progress.start("Scanning applications")
+
+processed = installed = failed = 0
+
+apps.each do |path|
+  progress.increment
+  
+  # Skip symbolic links (likely already managed by Homebrew)
+  next if File.symlink?(path)
+  
+  processed += 1
+  app_name = path.split('/').last.sub(/.app\z/, '')
+  
+  # Find matching Homebrew cask
+  cask_name = app_matcher.find_matching_cask(app_name)
+  next unless cask_name
+  
+  if options['interactive']
+    print "Replace #{app_name} with Homebrew version? (y/n): "
+    next unless gets.chomp.downcase == 'y'
+  end
+  
+  # Create backup if not in dry-run mode
+  unless options['dry_run']
+    backup_manager.backup_app(path, app_name)
+  end
+  
+  # Skip replacement in backup-only mode
+  next if options['backup_only']
+  
+  # Replace app with Homebrew version in non-dry-run mode
+  if options['dry_run']
+    puts "Would install #{cask_name} using Homebrew"
+  else
+    begin
+      FileUtils.mv(path, File.expand_path('~/.Trash/')) unless options['dry_run']
+      if homebrew.install_cask(cask_name)
+        installed += 1
+      else
+        failed += 1
+      end
+    rescue => e
+      error_handler.log_error("Failed to replace #{app_name}: #{e.message}")
+      failed += 1
+    end
+  end
+end
+
+progress.finish
+
+# Print summary
+puts "\nSummary:"
+puts "  Apps processed: #{processed}"
+puts "  Apps installed: #{installed}" unless options['dry_run'] || options['backup_only']
+puts "  Failed installs: #{failed}" if failed > 0
+puts "  Dry run mode: No changes were made" if options['dry_run']
+puts "  Backup only mode: No replacements were made" if options['backup_only']
